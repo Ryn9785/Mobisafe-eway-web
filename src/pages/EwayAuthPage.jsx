@@ -104,7 +104,7 @@ export default function EwayAuthPage() {
             </Typography>
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Enter your Fynamics eWay Bill API credentials. The authentication token will be
+            Enter your eWay Bill API credentials. The authentication token will be
             stored securely and auto-renewed when it expires.
           </Typography>
           <Divider sx={{ mb: 3 }} />
