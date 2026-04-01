@@ -1,8 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
 import { getStateName } from '../constants/stateCodes';
 import { formatEwayError } from '../constants/ewayErrors';
+import { getGstinList } from '../utils/gstinHelpers';
 import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, Chip, Divider,
   CircularProgress, LinearProgress, Table, TableBody, TableCell, TableContainer,
@@ -66,19 +67,21 @@ export default function FetchBillsPage() {
   const [order, setOrder] = useState('desc');
   const [searchTerm, setSearchTerm] = useState('');
 
-  const gstin = user?.attributes?.ewayGstin;
-  const stateCodes = user?.attributes?.ewayStateCodes
-    ? String(user.attributes.ewayStateCodes).split(',').map((s) => Number(s.trim())).filter((n) => n > 0)
-    : [];
+  const gstinList = getGstinList(user?.attributes);
   const ewayFilters = user?.attributes?.ewayFilters || null;
 
+  // Total number of GSTIN+state tasks for progress calculation
+  const totalTasks = gstinList.reduce((sum, g) => sum + g.stateCodes.length, 0);
+  const hasGstins = gstinList.length > 0;
+  const hasStateCodes = gstinList.some((g) => g.stateCodes.length > 0);
+
   const handleFetch = async () => {
-    if (!gstin) {
+    if (!hasGstins) {
       setError('No GSTIN configured. Ask your admin to set up eWay authentication.');
       return;
     }
-    if (stateCodes.length === 0) {
-      setError('No state codes configured. Ask your admin to configure state codes.');
+    if (!hasStateCodes) {
+      setError('No state codes configured for any GSTIN. Ask your admin to configure state codes.');
       return;
     }
 
@@ -92,27 +95,35 @@ export default function FetchBillsPage() {
     const selectedDate = new Date(date + 'T00:00:00+05:30');
     const allEwbNos = new Set();
     const stateErrors = [];
+    let tasksDone = 0;
 
     try {
-      for (let i = 0; i < stateCodes.length; i++) {
-        const sc = stateCodes[i];
-        setProgress({
-          step: 'Fetching transporter bills',
-          detail: `State ${sc} - ${getStateName(sc)} (${i + 1}/${stateCodes.length})`,
-          pct: ((i + 1) / stateCodes.length) * 40,
-        });
+      // Phase 1: Fetch transporter bills for each GSTIN + state code
+      for (const gEntry of gstinList) {
+        const { gstin, stateCodes } = gEntry;
+        if (stateCodes.length === 0) continue;
 
-        try {
-          const res = await api.getTransporterBills(selectedDate, sc, gstin);
-          if (Array.isArray(res)) {
-            res.forEach((b) => {
-              if (b.ewbNo) allEwbNos.add(Number(b.ewbNo));
-            });
-          } else if (res && res.status === '0') {
-            stateErrors.push(`State ${sc} (${getStateName(sc)}): ${resolveEwayApiError(res)}`);
+        for (let i = 0; i < stateCodes.length; i++) {
+          const sc = stateCodes[i];
+          tasksDone++;
+          setProgress({
+            step: 'Fetching transporter bills',
+            detail: `GSTIN ${gstin.slice(-4)} | State ${sc} - ${getStateName(sc)} (${tasksDone}/${totalTasks})`,
+            pct: (tasksDone / totalTasks) * 40,
+          });
+
+          try {
+            const res = await api.getTransporterBills(selectedDate, sc, gstin);
+            if (Array.isArray(res)) {
+              res.forEach((b) => {
+                if (b.ewbNo) allEwbNos.add(Number(b.ewbNo));
+              });
+            } else if (res && res.status === '0') {
+              stateErrors.push(`${gstin} | State ${sc} (${getStateName(sc)}): ${resolveEwayApiError(res)}`);
+            }
+          } catch (err) {
+            stateErrors.push(`${gstin} | State ${sc} (${getStateName(sc)}): ${err.message}`);
           }
-        } catch (err) {
-          stateErrors.push(`State ${sc} (${getStateName(sc)}): ${err.message}`);
         }
       }
 
@@ -120,13 +131,16 @@ export default function FetchBillsPage() {
         setErrors(stateErrors);
         setError(
           stateErrors.length > 0
-            ? 'No bills found. Some state queries returned errors (see below).'
-            : 'No eWay bills found for the selected date across all configured states.',
+            ? 'No bills found. Some queries returned errors (see below).'
+            : 'No eWay bills found for the selected date across all configured GSTINs and states.',
         );
         setLoading(false);
         return;
       }
 
+      // Phase 2: Fetch bill details using the first available GSTIN
+      // (bill details API accepts any authenticated GSTIN)
+      const primaryGstin = gstinList[0].gstin;
       const ewbList = Array.from(allEwbNos);
       const batches = chunk(ewbList, DETAILS_BATCH_SIZE);
       const allDetails = [];
@@ -141,7 +155,7 @@ export default function FetchBillsPage() {
         });
 
         try {
-          const res = await api.getBillDetails(batches[i], gstin);
+          const res = await api.getBillDetails(batches[i], primaryGstin);
           if (res.bills) {
             allDetails.push(...res.bills);
             fetchedCount += res.bills.length;
@@ -172,10 +186,11 @@ export default function FetchBillsPage() {
 
       setBills(filteredBills);
       setStats({
+        gstinsFetched: gstinList.filter((g) => g.stateCodes.length > 0).length,
+        totalStateTasks: totalTasks,
         totalTransporterBills: allEwbNos.size,
         totalDetailsFetched: allDetails.length,
         totalAfterFilter: filteredBills.length,
-        stateCodesFetched: stateCodes.length,
       });
       setErrors([...stateErrors, ...detailErrors]);
       setProgress({ step: 'Done', detail: '', pct: 100 });
@@ -257,24 +272,29 @@ export default function FetchBillsPage() {
         Fetch eWay Bills
       </Typography>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, color: 'text.secondary', fontSize: 14 }}>
-        {gstin ? (
-          <span>GSTIN: <strong>{gstin}</strong></span>
+        {hasGstins ? (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center', width: '100%' }}>
+            <span>GSTINs:</span>
+            {gstinList.map((g) => (
+              <Tooltip key={g.gstin} title={`States: ${g.stateCodes.length > 0 ? g.stateCodes.join(', ') : 'none'}`}>
+                <Chip
+                  label={g.gstin}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  sx={{ fontFamily: 'monospace', fontSize: 11 }}
+                />
+              </Tooltip>
+            ))}
+          </Box>
         ) : (
           <Alert severity="info" sx={{ py: 0, width: '100%' }}>
-            No GSTIN configured. Go to <strong>eWay Authentication</strong> to set it up.
+            No GSTIN configured. Go to <strong>GSTIN Management</strong> to set it up.
           </Alert>
         )}
-        {gstin && stateCodes.length > 0 && (
-          <>
-            <span>&middot; States:</span>
-            {stateCodes.map((sc) => (
-              <Chip key={sc} label={`${sc}`} size="small" />
-            ))}
-          </>
-        )}
-        {gstin && stateCodes.length === 0 && (
+        {hasGstins && !hasStateCodes && (
           <Alert severity="info" sx={{ py: 0, width: '100%', mt: 0.5 }}>
-            No state codes configured. Go to <strong>State Codes</strong> to set them up.
+            No state codes configured for any GSTIN. Go to <strong>GSTIN Management</strong> to set them up.
           </Alert>
         )}
         {ewayFilters && (
@@ -297,10 +317,10 @@ export default function FetchBillsPage() {
           />
           <Tooltip
             title={
-              !gstin
-                ? 'Configure GSTIN in eWay Authentication first'
-                : stateCodes.length === 0
-                  ? 'Configure State Codes first'
+              !hasGstins
+                ? 'Configure GSTINs in GSTIN Management first'
+                : !hasStateCodes
+                  ? 'Configure state codes for your GSTINs first'
                   : ''
             }
           >
@@ -308,7 +328,7 @@ export default function FetchBillsPage() {
               <Button
                 variant="contained"
                 onClick={handleFetch}
-                disabled={loading || !gstin || stateCodes.length === 0}
+                disabled={loading || !hasGstins || !hasStateCodes}
                 startIcon={loading ? <CircularProgress size={18} /> : <SearchIcon />}
               >
                 {loading ? 'Fetching...' : 'Fetch Bills'}
@@ -357,7 +377,8 @@ export default function FetchBillsPage() {
       {stats && (
         <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
           {[
-            { label: 'States Queried', value: stats.stateCodesFetched },
+            { label: 'GSTINs Queried', value: stats.gstinsFetched },
+            { label: 'State Queries', value: stats.totalStateTasks },
             { label: 'Total Bills', value: stats.totalAfterFilter },
           ].map((s) => (
             <Card key={s.label} sx={{ flex: '1 1 140px' }}>
