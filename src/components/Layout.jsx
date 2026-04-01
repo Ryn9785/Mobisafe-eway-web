@@ -9,7 +9,6 @@ import {
 import MenuIcon from '@mui/icons-material/Menu';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
-import MapIcon from '@mui/icons-material/Map';
 import PeopleIcon from '@mui/icons-material/People';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
@@ -29,8 +28,7 @@ export default function Layout() {
     { label: 'Fetch Bills', path: '/fetch-bills', icon: <ReceiptLongIcon /> },
     ...(isManager
       ? [
-          { label: 'eWay Authentication', path: '/eway-auth', icon: <VpnKeyIcon /> },
-          { label: 'State Codes', path: '/state-codes', icon: <MapIcon /> },
+          { label: 'GSTIN Management', path: '/eway-auth', icon: <VpnKeyIcon /> },
           { label: 'Manage Users', path: '/users', icon: <PeopleIcon /> },
         ]
       : []),

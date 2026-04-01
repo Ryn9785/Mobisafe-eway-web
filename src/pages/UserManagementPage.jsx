@@ -2,17 +2,20 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
 import STATE_CODES from '../constants/stateCodes';
+import { getGstinList, buildGstinAttributes } from '../utils/gstinHelpers';
 import {
   Box, Card, CardContent, Typography, Alert, Button, IconButton, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, Chip, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, Checkbox, FormControlLabel, Grid,
-  Divider, CircularProgress, Tooltip, Paper,
+  Divider, CircularProgress, Tooltip, Paper, Accordion, AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import CloseIcon from '@mui/icons-material/Close';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
 const EMPTY_FILTER = { fromGstin: '', fromPlace: '', fromTrdName: '' };
 
@@ -26,9 +29,7 @@ export default function UserManagementPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const adminStateCodes = user?.attributes?.ewayStateCodes
-    ? String(user.attributes.ewayStateCodes).split(',').map((s) => Number(s.trim())).filter((n) => n > 0)
-    : [];
+  const adminGstins = getGstinList(user?.attributes);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -75,14 +76,15 @@ export default function UserManagementPage() {
   const handleSave = async (formData) => {
     setSaving(true);
     try {
+      const gstinAttrs = buildGstinAttributes({}, formData.gstins);
+
       if (editingUser) {
         const updated = {
           ...editingUser,
           name: formData.name,
           attributes: {
             ...editingUser.attributes,
-            ewayGstin: user.attributes?.ewayGstin || '',
-            ewayStateCodes: formData.stateCodes.join(','),
+            ...gstinAttrs,
             ewayFilters: formData.filters.filter(
               (f) => f.fromGstin || f.fromPlace || f.fromTrdName,
             ),
@@ -95,8 +97,7 @@ export default function UserManagementPage() {
           email: formData.email,
           password: formData.password,
           attributes: {
-            ewayGstin: user.attributes?.ewayGstin || '',
-            ewayStateCodes: formData.stateCodes.join(','),
+            ...gstinAttrs,
             ewayFilters: formData.filters.filter(
               (f) => f.fromGstin || f.fromPlace || f.fromTrdName,
             ),
@@ -119,7 +120,7 @@ export default function UserManagementPage() {
         <Box>
           <Typography variant="h5">User Management</Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage sub-users with eWay bill filters
+            Manage sub-users with GSTIN access and eWay bill filters
           </Typography>
         </Box>
         <Button
@@ -164,16 +165,14 @@ export default function UserManagementPage() {
               <TableRow>
                 <TableCell>Name</TableCell>
                 <TableCell>Email</TableCell>
-                <TableCell>State Codes</TableCell>
+                <TableCell>Assigned GSTINs</TableCell>
                 <TableCell>Filters</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {users.map((u) => {
-                const uStateCodes = u.attributes?.ewayStateCodes
-                  ? String(u.attributes.ewayStateCodes).split(',').filter(Boolean)
-                  : [];
+                const uGstins = getGstinList(u.attributes);
                 const uFilters = u.attributes?.ewayFilters || [];
 
                 return (
@@ -185,18 +184,29 @@ export default function UserManagementPage() {
                     </TableCell>
                     <TableCell>{u.email}</TableCell>
                     <TableCell>
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {uStateCodes.slice(0, 5).map((sc) => (
-                          <Chip key={sc} label={sc} size="small" />
-                        ))}
-                        {uStateCodes.length > 5 && (
-                          <Chip label={`+${uStateCodes.length - 5}`} size="small" variant="outlined" />
-                        )}
-                        {uStateCodes.length === 0 && (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                        {uGstins.length === 0 && (
                           <Typography variant="caption" color="text.secondary">
                             None
                           </Typography>
                         )}
+                        {uGstins.map((g) => (
+                          <Box key={g.gstin} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                            <Chip
+                              label={g.gstin}
+                              size="small"
+                              color="primary"
+                              variant="outlined"
+                              sx={{ fontFamily: 'monospace', fontSize: 11 }}
+                            />
+                            {g.stateCodes.slice(0, 4).map((sc) => (
+                              <Chip key={sc} label={sc} size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                            ))}
+                            {g.stateCodes.length > 4 && (
+                              <Chip label={`+${g.stateCodes.length - 4}`} size="small" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                            )}
+                          </Box>
+                        ))}
                       </Box>
                     </TableCell>
                     <TableCell>
@@ -245,7 +255,7 @@ export default function UserManagementPage() {
         onClose={() => setDialogOpen(false)}
         onSave={handleSave}
         editingUser={editingUser}
-        adminStateCodes={adminStateCodes}
+        adminGstins={adminGstins}
         saving={saving}
       />
 
@@ -272,11 +282,14 @@ export default function UserManagementPage() {
   );
 }
 
-function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, saving }) {
+/* ─── User Create/Edit Dialog ─── */
+
+function UserDialog({ open, onClose, onSave, editingUser, adminGstins, saving }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedCodes, setSelectedCodes] = useState(new Set());
+  // Per-GSTIN state code selections: { [gstin]: Set<number> }
+  const [gstinSelections, setGstinSelections] = useState({});
   const [filters, setFilters] = useState([{ ...EMPTY_FILTER }]);
   const [error, setError] = useState('');
 
@@ -286,39 +299,65 @@ function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, savin
         setName(editingUser.name || '');
         setEmail(editingUser.email || '');
         setPassword('');
-        const codes = editingUser.attributes?.ewayStateCodes
-          ? String(editingUser.attributes.ewayStateCodes)
-              .split(',')
-              .map((s) => Number(s.trim()))
-              .filter((n) => n > 0)
-          : [];
-        setSelectedCodes(new Set(codes));
+        // Populate from existing user's gstins
+        const existingGstins = getGstinList(editingUser.attributes);
+        const selections = {};
+        for (const g of existingGstins) {
+          selections[g.gstin] = new Set(g.stateCodes);
+        }
+        setGstinSelections(selections);
         const existing = editingUser.attributes?.ewayFilters || [];
         setFilters(existing.length > 0 ? existing.map((f) => ({ ...f })) : [{ ...EMPTY_FILTER }]);
       } else {
         setName('');
         setEmail('');
         setPassword('');
-        setSelectedCodes(new Set());
+        setGstinSelections({});
         setFilters([{ ...EMPTY_FILTER }]);
       }
       setError('');
     }
   }, [open, editingUser]);
 
-  const toggleCode = (code) => {
-    setSelectedCodes((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
+  const toggleGstin = (gstin) => {
+    setGstinSelections((prev) => {
+      const next = { ...prev };
+      if (next[gstin]) {
+        delete next[gstin];
+      } else {
+        next[gstin] = new Set();
+      }
       return next;
     });
   };
 
+  const toggleStateCode = (gstin, code) => {
+    setGstinSelections((prev) => {
+      const next = { ...prev };
+      const codes = new Set(next[gstin] || []);
+      if (codes.has(code)) codes.delete(code);
+      else codes.add(code);
+      next[gstin] = codes;
+      return next;
+    });
+  };
+
+  const selectAllCodes = (gstin, adminCodes) => {
+    setGstinSelections((prev) => ({
+      ...prev,
+      [gstin]: new Set(adminCodes),
+    }));
+  };
+
+  const clearAllCodes = (gstin) => {
+    setGstinSelections((prev) => ({
+      ...prev,
+      [gstin]: new Set(),
+    }));
+  };
+
   const addFilter = () => setFilters((prev) => [...prev, { ...EMPTY_FILTER }]);
-
   const removeFilter = (idx) => setFilters((prev) => prev.filter((_, i) => i !== idx));
-
   const updateFilter = (idx, field, value) => {
     setFilters((prev) =>
       prev.map((f, i) => (i === idx ? { ...f, [field]: value } : f)),
@@ -338,13 +377,20 @@ function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, savin
       setError('Password is required');
       return;
     }
+
+    // Build gstins array from selections
+    const gstins = Object.entries(gstinSelections).map(([gstin, codesSet]) => ({
+      gstin,
+      stateCodes: Array.from(codesSet).sort((a, b) => a - b),
+    }));
+
     setError('');
     try {
       await onSave({
         name: name.trim(),
         email: email.trim(),
         password,
-        stateCodes: Array.from(selectedCodes),
+        gstins,
         filters,
       });
     } catch (err) {
@@ -352,9 +398,7 @@ function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, savin
     }
   };
 
-  const availableStateCodes = adminStateCodes.length > 0
-    ? STATE_CODES.filter((sc) => adminStateCodes.includes(sc.code))
-    : STATE_CODES;
+  const selectedGstinKeys = Object.keys(gstinSelections);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -371,6 +415,7 @@ function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, savin
           </Alert>
         )}
 
+        {/* ── User Details ── */}
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
           User Details
         </Typography>
@@ -413,37 +458,102 @@ function UserDialog({ open, onClose, onSave, editingUser, adminStateCodes, savin
         </Grid>
 
         <Divider sx={{ mb: 2 }} />
+
+        {/* ── GSTIN Assignment ── */}
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          State Codes
+          Assign GSTINs & State Codes
         </Typography>
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-          Select which state codes this user can query. Only states configured in your admin
-          account are available.
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
+          Select which GSTINs this user can access. For each GSTIN, choose which state codes they can query.
+          Only GSTINs and states configured in your admin account are available.
         </Typography>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 3 }}>
-          {availableStateCodes.map((sc) => (
-            <Chip
-              key={sc.code}
-              label={`${String(sc.code).padStart(2, '0')} - ${sc.name}`}
-              size="small"
-              color={selectedCodes.has(sc.code) ? 'primary' : 'default'}
-              onClick={() => toggleCode(sc.code)}
-              variant={selectedCodes.has(sc.code) ? 'filled' : 'outlined'}
-              sx={{ cursor: 'pointer' }}
-            />
-          ))}
-          {availableStateCodes.length === 0 && (
-            <Typography variant="body2" color="text.secondary">
-              No state codes configured in admin account. Please configure state codes first.
-            </Typography>
-          )}
-        </Box>
+
+        {adminGstins.length === 0 ? (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            No GSTINs configured in your admin account. Please add GSTINs in the GSTIN Management page first.
+          </Alert>
+        ) : (
+          <Box sx={{ mb: 3 }}>
+            {adminGstins.map((adminG) => {
+              const isAssigned = Boolean(gstinSelections[adminG.gstin]);
+              const userCodes = gstinSelections[adminG.gstin] || new Set();
+              // Only show admin's configured state codes for this GSTIN
+              const availableCodes = adminG.stateCodes;
+
+              return (
+                <Paper key={adminG.gstin} variant="outlined" sx={{ mb: 1.5 }}>
+                  <Box sx={{ px: 2, py: 1, display: 'flex', alignItems: 'center' }}>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={isAssigned}
+                          onChange={() => toggleGstin(adminG.gstin)}
+                        />
+                      }
+                      label={
+                        <Typography variant="body2" fontWeight={500} sx={{ fontFamily: 'monospace' }}>
+                          {adminG.gstin}
+                        </Typography>
+                      }
+                    />
+                    {isAssigned && (
+                      <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                        {userCodes.size} of {availableCodes.length} state(s) selected
+                      </Typography>
+                    )}
+                  </Box>
+
+                  {isAssigned && (
+                    <Box sx={{ px: 2, pb: 2 }}>
+                      <Divider sx={{ mb: 1 }} />
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                        <Typography variant="caption" fontWeight={600}>
+                          State Codes
+                        </Typography>
+                        <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5 }}>
+                          <Button size="small" sx={{ fontSize: 11 }} onClick={() => selectAllCodes(adminG.gstin, availableCodes)}>
+                            All
+                          </Button>
+                          <Button size="small" sx={{ fontSize: 11 }} onClick={() => clearAllCodes(adminG.gstin)}>
+                            None
+                          </Button>
+                        </Box>
+                      </Box>
+                      {availableCodes.length === 0 ? (
+                        <Typography variant="caption" color="text.secondary">
+                          No state codes configured for this GSTIN. Configure them in GSTIN Management.
+                        </Typography>
+                      ) : (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {availableCodes.map((code) => {
+                            const st = STATE_CODES.find((s) => s.code === code);
+                            return (
+                              <Chip
+                                key={code}
+                                label={`${String(code).padStart(2, '0')} - ${st?.name || '?'}`}
+                                size="small"
+                                color={userCodes.has(code) ? 'primary' : 'default'}
+                                onClick={() => toggleStateCode(adminG.gstin, code)}
+                                variant={userCodes.has(code) ? 'filled' : 'outlined'}
+                                sx={{ cursor: 'pointer' }}
+                              />
+                            );
+                          })}
+                        </Box>
+                      )}
+                    </Box>
+                  )}
+                </Paper>
+              );
+            })}
+          </Box>
+        )}
 
         <Divider sx={{ mb: 2 }} />
+
+        {/* ── Filters ── */}
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-          <Typography variant="subtitle2">
-            eWay Bill Filters
-          </Typography>
+          <Typography variant="subtitle2">eWay Bill Filters</Typography>
           <Button size="small" startIcon={<AddIcon />} onClick={addFilter} sx={{ ml: 'auto' }}>
             Add Filter
           </Button>
