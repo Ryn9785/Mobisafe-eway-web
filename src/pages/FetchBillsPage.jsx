@@ -94,6 +94,7 @@ export default function FetchBillsPage() {
 
     const selectedDate = new Date(date + 'T00:00:00+05:30');
     const allEwbNos = new Set();
+    const ewbNosByGstin = new Map(); // Track which eWay bills belong to which GSTIN
     const stateErrors = [];
     let tasksDone = 0;
 
@@ -102,6 +103,8 @@ export default function FetchBillsPage() {
       for (const gEntry of gstinList) {
         const { gstin, stateCodes } = gEntry;
         if (stateCodes.length === 0) continue;
+
+        if (!ewbNosByGstin.has(gstin)) ewbNosByGstin.set(gstin, new Set());
 
         for (let i = 0; i < stateCodes.length; i++) {
           const sc = stateCodes[i];
@@ -116,7 +119,11 @@ export default function FetchBillsPage() {
             const res = await api.getTransporterBills(selectedDate, sc, gstin);
             if (Array.isArray(res)) {
               res.forEach((b) => {
-                if (b.ewbNo) allEwbNos.add(Number(b.ewbNo));
+                if (b.ewbNo) {
+                  const ewbNo = Number(b.ewbNo);
+                  allEwbNos.add(ewbNo);
+                  ewbNosByGstin.get(gstin).add(ewbNo);
+                }
               });
             } else if (res && res.status === '0') {
               stateErrors.push(`${gstin} | State ${sc} (${getStateName(sc)}): ${resolveEwayApiError(res)}`);
@@ -138,35 +145,46 @@ export default function FetchBillsPage() {
         return;
       }
 
-      // Phase 2: Fetch bill details using the first available GSTIN
-      // (bill details API accepts any authenticated GSTIN)
-      const primaryGstin = gstinList[0].gstin;
-      const ewbList = Array.from(allEwbNos);
-      const batches = chunk(ewbList, DETAILS_BATCH_SIZE);
+      // Phase 2: Fetch bill details per GSTIN using its own eWay bill numbers
       const allDetails = [];
       const detailErrors = [];
       let fetchedCount = 0;
+      const totalBills = allEwbNos.size;
+      let totalBatches = 0;
+      let batchesDone = 0;
 
-      for (let i = 0; i < batches.length; i++) {
-        setProgress({
-          step: 'Fetching bill details',
-          detail: `Batch ${i + 1}/${batches.length} (${fetchedCount}/${ewbList.length} bills)`,
-          pct: 40 + ((i + 1) / batches.length) * 50,
-        });
+      // Calculate total batches for progress
+      for (const [, ewbSet] of ewbNosByGstin) {
+        if (ewbSet.size > 0) totalBatches += Math.ceil(ewbSet.size / DETAILS_BATCH_SIZE);
+      }
 
-        try {
-          const res = await api.getBillDetails(batches[i], primaryGstin);
-          if (res.bills) {
-            allDetails.push(...res.bills);
-            fetchedCount += res.bills.length;
+      for (const [gstin, ewbSet] of ewbNosByGstin) {
+        if (ewbSet.size === 0) continue;
+        const ewbList = Array.from(ewbSet);
+        const batches = chunk(ewbList, DETAILS_BATCH_SIZE);
+
+        for (let i = 0; i < batches.length; i++) {
+          batchesDone++;
+          setProgress({
+            step: 'Fetching bill details',
+            detail: `GSTIN ${gstin.slice(-4)} — Batch ${batchesDone}/${totalBatches} (${fetchedCount}/${totalBills} bills)`,
+            pct: 40 + (batchesDone / totalBatches) * 50,
+          });
+
+          try {
+            const res = await api.getBillDetails(batches[i], gstin);
+            if (res.bills) {
+              allDetails.push(...res.bills);
+              fetchedCount += res.bills.length;
+            }
+            if (res.errors) {
+              detailErrors.push(
+                ...res.errors.map((e) => `EWB ${e.ewbNo}: ${formatEwayError(e.error || e)}`),
+              );
+            }
+          } catch (err) {
+            detailErrors.push(`GSTIN ${gstin.slice(-4)} Batch ${i + 1}: ${err.message}`);
           }
-          if (res.errors) {
-            detailErrors.push(
-              ...res.errors.map((e) => `EWB ${e.ewbNo}: ${formatEwayError(e.error || e)}`),
-            );
-          }
-        } catch (err) {
-          detailErrors.push(`Batch ${i + 1}: ${err.message}`);
         }
       }
 
