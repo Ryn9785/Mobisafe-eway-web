@@ -105,6 +105,17 @@ const api = {
     return jsonRequest(`${BASE}/eway/details?${params}`);
   },
 
+  // --- eWay Bill Extension ---
+  extendEwayBill(gstin, body) {
+    return jsonRequest(
+      `${BASE}/eway/details/extend?gstin=${encodeURIComponent(gstin)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    );
+  },
+
   // --- Shipment Excel Download ---
   downloadShipmentExcel(ewayNos, filename) {
     const params = new URLSearchParams();
