@@ -1,19 +1,21 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
-import { getStateName } from '../constants/stateCodes';
+import STATE_CODES, { getStateName } from '../constants/stateCodes';
 import { formatEwayError } from '../constants/ewayErrors';
 import { getGstinList } from '../utils/gstinHelpers';
 import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, Chip, Divider,
   CircularProgress, LinearProgress, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Collapse, Tooltip, TablePagination,
-  TableSortLabel, InputAdornment,
+  TableSortLabel, InputAdornment, Dialog, DialogTitle, DialogContent, DialogActions,
+  MenuItem,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import DownloadIcon from '@mui/icons-material/Download';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import MoreTimeIcon from '@mui/icons-material/MoreTime';
 
 const DETAILS_BATCH_SIZE = 150;
 
@@ -35,6 +37,22 @@ function resolveEwayApiError(res) {
   const code = errObj.errorCodes || errObj.errorCode;
   const known = formatEwayError({ errorCodes: code, info });
   return known || info || 'Unknown error';
+}
+
+function parseValidUpto(validUpto) {
+  if (!validUpto) return null;
+  const m = validUpto.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]);
+}
+
+function canExtendBill(bill) {
+  if (bill.status !== 'ACT') return false;
+  const validDate = parseValidUpto(bill.validUpto);
+  if (!validDate) return false;
+  const now = Date.now();
+  const eightHours = 8 * 60 * 60 * 1000;
+  return now >= validDate.getTime() - eightHours && now <= validDate.getTime() + eightHours;
 }
 
 const COLUMNS = [
@@ -66,6 +84,7 @@ export default function FetchBillsPage() {
   const [orderBy, setOrderBy] = useState('ewbNo');
   const [order, setOrder] = useState('desc');
   const [searchTerm, setSearchTerm] = useState('');
+  const [extendBill, setExtendBill] = useState(null);
 
   const gstinList = getGstinList(user?.attributes);
   const ewayFilters = user?.attributes?.ewayFilters || null;
@@ -248,6 +267,18 @@ export default function FetchBillsPage() {
     const isAsc = orderBy === column && order === 'asc';
     setOrder(isAsc ? 'desc' : 'asc');
     setOrderBy(column);
+  };
+
+  const handleExtendSuccess = (ewbNo, newValidUpto) => {
+    setBills((prev) =>
+      prev.map((b) => {
+        if (b.ewbNo !== ewbNo) return b;
+        const updated = { ...b };
+        if (newValidUpto) updated.validUpto = newValidUpto;
+        updated.extendedTimes = (b.extendedTimes || 0) + 1;
+        return updated;
+      }),
+    );
   };
 
   const filtered = searchTerm
@@ -466,6 +497,7 @@ export default function FetchBillsPage() {
                       expanded={expandedRow === bill.ewbNo}
                       onToggle={() => setExpandedRow(expandedRow === bill.ewbNo ? null : bill.ewbNo)}
                       getVehicle={getVehicle}
+                      onExtend={() => setExtendBill(bill)}
                     />
                   ))}
                 </TableBody>
@@ -486,11 +518,21 @@ export default function FetchBillsPage() {
           </CardContent>
         </Card>
       )}
+      {extendBill && (
+        <ExtendDialog
+          key={extendBill.ewbNo}
+          bill={extendBill}
+          open
+          onClose={() => setExtendBill(null)}
+          onSuccess={handleExtendSuccess}
+          gstin={gstinList[0]?.gstin || ''}
+        />
+      )}
     </Box>
   );
 }
 
-function BillRow({ bill, expanded, onToggle, getVehicle }) {
+function BillRow({ bill, expanded, onToggle, getVehicle, onExtend }) {
   return (
     <>
       <TableRow hover sx={{ '& > *': { borderBottom: expanded ? 'none' : undefined } }}>
@@ -538,9 +580,21 @@ function BillRow({ bill, expanded, onToggle, getVehicle }) {
         <TableCell colSpan={12} sx={{ py: 0 }}>
           <Collapse in={expanded} timeout="auto" unmountOnExit>
             <Box sx={{ py: 2, px: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Full Details
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="subtitle2">
+                  Full Details
+                </Typography>
+                {canExtendBill(bill) && (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<MoreTimeIcon />}
+                    onClick={onExtend}
+                  >
+                    Extend Validity
+                  </Button>
+                )}
+              </Box>
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 1 }}>
                 {[
                   ['EWB No', bill.ewbNo],
@@ -618,5 +672,222 @@ function BillRow({ bill, expanded, onToggle, getVehicle }) {
         </TableCell>
       </TableRow>
     </>
+  );
+}
+
+function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
+  const latestVehicle = bill.VehiclListDetails?.length > 0
+    ? bill.VehiclListDetails[bill.VehiclListDetails.length - 1]
+    : {};
+
+  const [vehicleNo, setVehicleNo] = useState(latestVehicle.vehicleNo || '');
+  const [transDocNo, setTransDocNo] = useState(latestVehicle.transDocNo || '');
+  const [transDocDate, setTransDocDate] = useState(latestVehicle.transDocDate || '');
+  const [transMode, setTransMode] = useState(latestVehicle.transMode || '1');
+  const [consignmentStatus, setConsignmentStatus] = useState('M');
+  const [extnRsnCode, setExtnRsnCode] = useState('99');
+  const [extnRemarks, setExtnRemarks] = useState('Delay');
+  const [fromPlace, setFromPlace] = useState('');
+  const [fromState, setFromState] = useState('');
+  const [fromPincode, setFromPincode] = useState('');
+  const [remainingDistance, setRemainingDistance] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleSubmit = async () => {
+    if (!fromPlace.trim()) { setError('From Place is required'); return; }
+    if (!fromState) { setError('From State is required'); return; }
+    if (!fromPincode || !/^\d{6}$/.test(fromPincode)) { setError('Pincode must be exactly 6 digits'); return; }
+    const dist = parseFloat(remainingDistance);
+    if (!dist || dist <= 0 || dist >= 10000) { setError('Distance must be between 0 and 10,000 km'); return; }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const body = {
+        ewbNo: bill.ewbNo,
+        vehicleNo,
+        transDocNo,
+        transDocDate,
+        transMode,
+        extnRsnCode,
+        extnRemarks,
+        consignmentStatus,
+        fromPlace: fromPlace.trim(),
+        fromState: Number(fromState),
+        fromPincode,
+        remainingDistance: dist,
+      };
+
+      const res = await api.extendEwayBill(gstin, body);
+
+      if (res && (res.status === '0' || res.status === 0)) {
+        setError(resolveEwayApiError(res));
+      } else {
+        const newValidUpto = res?.validUpto || null;
+        setSuccess(`eWay bill extended successfully.${newValidUpto ? ` New validity: ${newValidUpto}` : ''}`);
+        onSuccess(bill.ewbNo, newValidUpto);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to extend eWay bill');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Extend eWay Bill</DialogTitle>
+      <DialogContent>
+        {error && <Alert severity="error" sx={{ mb: 2, mt: 1 }}>{error}</Alert>}
+        {success && <Alert severity="success" sx={{ mb: 2, mt: 1 }}>{success}</Alert>}
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mt: 1 }}>
+          <TextField label="EWB No" value={bill.ewbNo || ''} size="small" disabled fullWidth />
+          <TextField
+            label="Vehicle No"
+            value={vehicleNo}
+            onChange={(e) => setVehicleNo(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
+          <TextField
+            label="Trans Doc No"
+            value={transDocNo}
+            onChange={(e) => setTransDocNo(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
+          <TextField
+            label="Trans Doc Date"
+            value={transDocDate}
+            onChange={(e) => setTransDocDate(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+            placeholder="DD/MM/YYYY"
+          />
+          <TextField
+            label="Trans Mode"
+            value={transMode}
+            onChange={(e) => setTransMode(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="1">1 - Road</MenuItem>
+            <MenuItem value="2">2 - Rail</MenuItem>
+            <MenuItem value="3">3 - Air</MenuItem>
+            <MenuItem value="4">4 - Ship</MenuItem>
+            <MenuItem value="5">5 - In Transit</MenuItem>
+          </TextField>
+          <TextField
+            label="Consignment Status"
+            value={consignmentStatus}
+            onChange={(e) => setConsignmentStatus(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="M">M - In Movement</MenuItem>
+            <MenuItem value="T">T - In Transit</MenuItem>
+          </TextField>
+          <TextField
+            label="Extension Reason"
+            value={extnRsnCode}
+            onChange={(e) => setExtnRsnCode(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="1">1 - Natural Calamity</MenuItem>
+            <MenuItem value="2">2 - Law and Order</MenuItem>
+            <MenuItem value="4">4 - Transshipment</MenuItem>
+            <MenuItem value="5">5 - Accident</MenuItem>
+            <MenuItem value="99">99 - Others</MenuItem>
+          </TextField>
+          <TextField
+            label="Extension Remarks"
+            value={extnRemarks}
+            onChange={(e) => setExtnRemarks(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>Location Details</Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+          <TextField
+            label="From Place"
+            value={fromPlace}
+            onChange={(e) => setFromPlace(e.target.value)}
+            size="small"
+            required
+            fullWidth
+            disabled={!!success}
+          />
+          <TextField
+            label="From State"
+            value={fromState}
+            onChange={(e) => setFromState(e.target.value)}
+            size="small"
+            required
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            {STATE_CODES.map((s) => (
+              <MenuItem key={s.code} value={s.code}>{s.code} - {s.name}</MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            label="From Pincode"
+            value={fromPincode}
+            onChange={(e) => setFromPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            size="small"
+            required
+            fullWidth
+            disabled={!!success}
+            inputProps={{ maxLength: 6 }}
+          />
+          <TextField
+            label="Remaining Distance (km)"
+            value={remainingDistance}
+            onChange={(e) => setRemainingDistance(e.target.value)}
+            size="small"
+            required
+            fullWidth
+            type="number"
+            disabled={!!success}
+          />
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose}>{success ? 'Close' : 'Cancel'}</Button>
+        {!success && (
+          <Button
+            variant="contained"
+            onClick={handleSubmit}
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={18} /> : null}
+          >
+            {loading ? 'Extending...' : 'Extend'}
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
   );
 }
