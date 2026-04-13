@@ -680,6 +680,13 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
     ? bill.VehiclListDetails[bill.VehiclListDetails.length - 1]
     : {};
 
+  const [vehicleNo, setVehicleNo] = useState(latestVehicle.vehicleNo || '');
+  const [transDocNo, setTransDocNo] = useState(latestVehicle.transDocNo || '');
+  const [transDocDate, setTransDocDate] = useState(latestVehicle.transDocDate || '');
+  const [transMode, setTransMode] = useState(latestVehicle.transMode || '1');
+  const [consignmentStatus, setConsignmentStatus] = useState('M');
+  const [extnRsnCode, setExtnRsnCode] = useState('99');
+  const [extnRemarks, setExtnRemarks] = useState('Delay');
   const [fromPlace, setFromPlace] = useState('');
   const [fromState, setFromState] = useState('');
   const [fromPincode, setFromPincode] = useState('');
@@ -701,13 +708,13 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
     try {
       const body = {
         ewbNo: bill.ewbNo,
-        vehicleNo: latestVehicle.vehicleNo || '',
-        transDocNo: latestVehicle.transDocNo || '',
-        transDocDate: latestVehicle.transDocDate || '',
-        transMode: latestVehicle.transMode || '1',
-        extnRsnCode: '99',
-        extnRemarks: 'Delay',
-        consignmentStatus: 'M',
+        vehicleNo,
+        transDocNo,
+        transDocDate,
+        transMode,
+        extnRsnCode,
+        extnRemarks,
+        consignmentStatus,
         fromPlace: fromPlace.trim(),
         fromState: Number(fromState),
         fromPincode,
@@ -741,20 +748,87 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
         {error && <Alert severity="error" sx={{ mb: 2, mt: 1 }}>{error}</Alert>}
         {success && <Alert severity="success" sx={{ mb: 2, mt: 1 }}>{success}</Alert>}
 
-        <Typography variant="subtitle2" sx={{ mt: 1, mb: 1 }}>Auto-populated Details</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mb: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mt: 1 }}>
           <TextField label="EWB No" value={bill.ewbNo || ''} size="small" disabled fullWidth />
-          <TextField label="Vehicle No" value={latestVehicle.vehicleNo || '-'} size="small" disabled fullWidth />
-          <TextField label="Trans Doc No" value={latestVehicle.transDocNo || '-'} size="small" disabled fullWidth />
-          <TextField label="Trans Doc Date" value={latestVehicle.transDocDate || '-'} size="small" disabled fullWidth />
-          <TextField label="Trans Mode" value={latestVehicle.transMode || '-'} size="small" disabled fullWidth />
-          <TextField label="Consignment Status" value="M - In Movement" size="small" disabled fullWidth />
-          <TextField label="Extension Reason" value="99 - Others" size="small" disabled fullWidth />
-          <TextField label="Extension Remarks" value="Delay" size="small" disabled fullWidth />
+          <TextField
+            label="Vehicle No"
+            value={vehicleNo}
+            onChange={(e) => setVehicleNo(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
+          <TextField
+            label="Trans Doc No"
+            value={transDocNo}
+            onChange={(e) => setTransDocNo(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
+          <TextField
+            label="Trans Doc Date"
+            value={transDocDate}
+            onChange={(e) => setTransDocDate(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+            placeholder="DD/MM/YYYY"
+          />
+          <TextField
+            label="Trans Mode"
+            value={transMode}
+            onChange={(e) => setTransMode(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="1">1 - Road</MenuItem>
+            <MenuItem value="2">2 - Rail</MenuItem>
+            <MenuItem value="3">3 - Air</MenuItem>
+            <MenuItem value="4">4 - Ship</MenuItem>
+            <MenuItem value="5">5 - In Transit</MenuItem>
+          </TextField>
+          <TextField
+            label="Consignment Status"
+            value={consignmentStatus}
+            onChange={(e) => setConsignmentStatus(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="M">M - In Movement</MenuItem>
+            <MenuItem value="T">T - In Transit</MenuItem>
+          </TextField>
+          <TextField
+            label="Extension Reason"
+            value={extnRsnCode}
+            onChange={(e) => setExtnRsnCode(e.target.value)}
+            size="small"
+            select
+            fullWidth
+            disabled={!!success}
+          >
+            <MenuItem value="1">1 - Natural Calamity</MenuItem>
+            <MenuItem value="2">2 - Law and Order</MenuItem>
+            <MenuItem value="4">4 - Transshipment</MenuItem>
+            <MenuItem value="5">5 - Accident</MenuItem>
+            <MenuItem value="99">99 - Others</MenuItem>
+          </TextField>
+          <TextField
+            label="Extension Remarks"
+            value={extnRemarks}
+            onChange={(e) => setExtnRemarks(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!!success}
+          />
         </Box>
 
         <Divider sx={{ my: 2 }} />
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>Enter Details</Typography>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>Location Details</Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
           <TextField
             label="From Place"
