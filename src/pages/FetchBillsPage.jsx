@@ -57,6 +57,8 @@ function canExtendBill(bill) {
 
 const COLUMNS = [
   { id: 'ewbNo', label: 'EWB No' },
+  { id: 'validUpto', label: 'Valid Upto' },
+  { id: 'vehicle', label: 'Vehicle' },
   { id: 'ewayBillDate', label: 'Date' },
   { id: 'status', label: 'Status' },
   { id: 'fromGstin', label: 'From GSTIN' },
@@ -65,7 +67,6 @@ const COLUMNS = [
   { id: 'toTrdName', label: 'Consignee' },
   { id: 'toPlace', label: 'Destination' },
   { id: 'totInvValue', label: 'Invoice Value', align: 'right' },
-  { id: 'validUpto', label: 'Valid Upto' },
 ];
 
 export default function FetchBillsPage() {
@@ -296,8 +297,22 @@ export default function FetchBillsPage() {
     : bills;
 
   const filteredAndSorted = [...filtered].sort((a, b) => {
-    const aVal = a[orderBy] ?? '';
-    const bVal = b[orderBy] ?? '';
+    let aVal, bVal;
+    if (orderBy === 'vehicle') {
+      aVal = getVehicle(a);
+      bVal = getVehicle(b);
+    } else {
+      aVal = a[orderBy] ?? '';
+      bVal = b[orderBy] ?? '';
+    }
+    // Parse DD/MM/YYYY date fields for proper chronological sorting
+    if (orderBy === 'validUpto' || orderBy === 'ewayBillDate') {
+      const aDate = parseValidUpto(String(aVal));
+      const bDate = parseValidUpto(String(bVal));
+      const aTime = aDate ? aDate.getTime() : 0;
+      const bTime = bDate ? bDate.getTime() : 0;
+      return order === 'asc' ? aTime - bTime : bTime - aTime;
+    }
     if (typeof aVal === 'number' && typeof bVal === 'number') {
       return order === 'asc' ? aVal - bVal : bVal - aVal;
     }
@@ -486,7 +501,7 @@ export default function FetchBillsPage() {
                         </TableSortLabel>
                       </TableCell>
                     ))}
-                    <TableCell>Vehicle</TableCell>
+                    <TableCell>Extend</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -546,6 +561,8 @@ function BillRow({ bill, expanded, onToggle, getVehicle, onExtend }) {
             {bill.ewbNo}
           </Typography>
         </TableCell>
+        <TableCell>{bill.validUpto || '-'}</TableCell>
+        <TableCell>{getVehicle(bill)}</TableCell>
         <TableCell>{bill.ewayBillDate || '-'}</TableCell>
         <TableCell>
           <Chip
@@ -573,28 +590,26 @@ function BillRow({ bill, expanded, onToggle, getVehicle, onExtend }) {
         </TableCell>
         <TableCell>{bill.toPlace || '-'}</TableCell>
         <TableCell align="right">{formatCurrency(bill.totInvValue)}</TableCell>
-        <TableCell>{bill.validUpto || '-'}</TableCell>
-        <TableCell>{getVehicle(bill)}</TableCell>
+        <TableCell>
+          {canExtendBill(bill) && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<MoreTimeIcon />}
+              onClick={onExtend}
+            >
+              Extend
+            </Button>
+          )}
+        </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell colSpan={12} sx={{ py: 0 }}>
+        <TableCell colSpan={13} sx={{ py: 0 }}>
           <Collapse in={expanded} timeout="auto" unmountOnExit>
             <Box sx={{ py: 2, px: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                <Typography variant="subtitle2">
-                  Full Details
-                </Typography>
-                {canExtendBill(bill) && (
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<MoreTimeIcon />}
-                    onClick={onExtend}
-                  >
-                    Extend Validity
-                  </Button>
-                )}
-              </Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Full Details
+              </Typography>
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 1 }}>
                 {[
                   ['EWB No', bill.ewbNo],
@@ -683,8 +698,13 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
   const [vehicleNo, setVehicleNo] = useState(latestVehicle.vehicleNo || '');
   const [transDocNo, setTransDocNo] = useState(latestVehicle.transDocNo || '');
   const [transDocDate, setTransDocDate] = useState(latestVehicle.transDocDate || '');
-  const [transMode, setTransMode] = useState(latestVehicle.transMode || '1');
-  const [consignmentStatus, setConsignmentStatus] = useState('M');
+  const initMode = latestVehicle.transMode || '1';
+  const [transMode, setTransMode] = useState(initMode);
+  const [consignmentStatus, setConsignmentStatus] = useState(initMode === '5' ? 'T' : 'M');
+  const [transitType, setTransitType] = useState('');
+  const [addressLine1, setAddressLine1] = useState('');
+  const [addressLine2, setAddressLine2] = useState('');
+  const [addressLine3, setAddressLine3] = useState('');
   const [extnRsnCode, setExtnRsnCode] = useState('99');
   const [extnRemarks, setExtnRemarks] = useState('Delay');
   const [fromPlace, setFromPlace] = useState('');
@@ -695,12 +715,43 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  const isInTransit = consignmentStatus === 'T';
+
+  const handleTransModeChange = (mode) => {
+    setTransMode(mode);
+    if (mode === '5') {
+      setConsignmentStatus('T');
+    } else {
+      setConsignmentStatus('M');
+      setTransitType('');
+      setAddressLine1('');
+      setAddressLine2('');
+      setAddressLine3('');
+    }
+  };
+
   const handleSubmit = async () => {
+    // Vehicle number validation
+    if (transMode === '1' && !vehicleNo.trim()) { setError('Vehicle number is required for Road transport mode'); return; }
+    if (vehicleNo.trim() && !/^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/i.test(vehicleNo.trim().replace(/\s/g, ''))) {
+      setError('Invalid vehicle number format (e.g. MH12AB1234)'); return;
+    }
+    // Reason validation
+    if (!extnRsnCode) { setError('Extension reason is required'); return; }
+    if (!extnRemarks.trim()) { setError('Extension remarks are required'); return; }
+    // Transit type & address validation when In Transit
+    if (isInTransit) {
+      if (!transitType) { setError('Transit Type is required when Consignment Status is In Transit'); return; }
+      if (!addressLine1.trim()) { setError('Address Line 1 is required when Consignment Status is In Transit'); return; }
+      if (!addressLine2.trim()) { setError('Address Line 2 is required when Consignment Status is In Transit'); return; }
+      if (!addressLine3.trim()) { setError('Address Line 3 is required when Consignment Status is In Transit'); return; }
+    }
+    // Location validations
     if (!fromPlace.trim()) { setError('From Place is required'); return; }
     if (!fromState) { setError('From State is required'); return; }
     if (!fromPincode || !/^\d{6}$/.test(fromPincode)) { setError('Pincode must be exactly 6 digits'); return; }
     const dist = parseFloat(remainingDistance);
-    if (!dist || dist <= 0 || dist >= 10000) { setError('Distance must be between 0 and 10,000 km'); return; }
+    if (isNaN(dist) || dist < 0 || dist >= 10000) { setError('Distance must be between 0 and 10,000 km'); return; }
 
     setLoading(true);
     setError('');
@@ -708,13 +759,19 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
     try {
       const body = {
         ewbNo: bill.ewbNo,
-        vehicleNo,
+        vehicleNo: vehicleNo.trim(),
         transDocNo,
         transDocDate,
         transMode,
         extnRsnCode,
         extnRemarks,
         consignmentStatus,
+        transitType: isInTransit ? transitType : '',
+        ...(isInTransit && {
+          addressLine1: addressLine1.trim(),
+          addressLine2: addressLine2.trim(),
+          addressLine3: addressLine3.trim(),
+        }),
         fromPlace: fromPlace.trim(),
         fromState: Number(fromState),
         fromPincode,
@@ -778,7 +835,7 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
           <TextField
             label="Trans Mode"
             value={transMode}
-            onChange={(e) => setTransMode(e.target.value)}
+            onChange={(e) => handleTransModeChange(e.target.value)}
             size="small"
             select
             fullWidth
@@ -793,14 +850,11 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
           <TextField
             label="Consignment Status"
             value={consignmentStatus}
-            onChange={(e) => setConsignmentStatus(e.target.value)}
             size="small"
-            select
             fullWidth
-            disabled={!!success}
+            disabled
+            helperText={transMode === '5' ? 'Auto-set to T for In Transit mode' : 'Auto-set to M for modes 1-4'}
           >
-            <MenuItem value="M">M - In Movement</MenuItem>
-            <MenuItem value="T">T - In Transit</MenuItem>
           </TextField>
           <TextField
             label="Extension Reason"
@@ -826,6 +880,56 @@ function ExtendDialog({ bill, open, onClose, onSuccess, gstin }) {
             disabled={!!success}
           />
         </Box>
+
+        {isInTransit && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>Transit Details</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField
+                label="Transit Type"
+                value={transitType}
+                onChange={(e) => setTransitType(e.target.value)}
+                size="small"
+                select
+                required
+                fullWidth
+                disabled={!!success}
+              >
+                <MenuItem value="R">R - Road</MenuItem>
+                <MenuItem value="W">W - Warehouse</MenuItem>
+                <MenuItem value="O">O - Others</MenuItem>
+              </TextField>
+              <TextField
+                label="Address Line 1"
+                value={addressLine1}
+                onChange={(e) => setAddressLine1(e.target.value)}
+                size="small"
+                required
+                fullWidth
+                disabled={!!success}
+              />
+              <TextField
+                label="Address Line 2"
+                value={addressLine2}
+                onChange={(e) => setAddressLine2(e.target.value)}
+                size="small"
+                required
+                fullWidth
+                disabled={!!success}
+              />
+              <TextField
+                label="Address Line 3"
+                value={addressLine3}
+                onChange={(e) => setAddressLine3(e.target.value)}
+                size="small"
+                required
+                fullWidth
+                disabled={!!success}
+              />
+            </Box>
+          </>
+        )}
 
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle2" sx={{ mb: 1 }}>Location Details</Typography>
