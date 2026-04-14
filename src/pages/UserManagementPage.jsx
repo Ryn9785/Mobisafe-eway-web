@@ -16,6 +16,10 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import KeyIcon from '@mui/icons-material/VpnKey';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+
+const EWAY_ROLE_NAME = 'EWAY_USER';
 
 const EMPTY_FILTER = { fromGstin: '', fromPlace: '', fromTrdName: '' };
 
@@ -28,6 +32,9 @@ export default function UserManagementPage() {
   const [editingUser, setEditingUser] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [ewayRoleId, setEwayRoleId] = useState(null);
+  const [ewayMemberIds, setEwayMemberIds] = useState(() => new Set());
+  const [grantingId, setGrantingId] = useState(null);
 
   const adminGstins = getGstinList(user?.attributes);
 
@@ -43,9 +50,46 @@ export default function UserManagementPage() {
     }
   }, [user?.id]);
 
+  const refreshEwayMembers = useCallback(async (roleId) => {
+    if (!roleId) return;
+    try {
+      const members = await api.listRoleMembers(roleId);
+      setEwayMemberIds(new Set((members || []).map((m) => m.id)));
+    } catch (err) {
+      // non-fatal: admin might lack role:view; just skip the indicator
+      setEwayMemberIds(new Set());
+    }
+  }, []);
+
   useEffect(() => {
-    if (isManager) fetchUsers();
-  }, [isManager, fetchUsers]);
+    if (!isManager) return;
+    fetchUsers();
+    (async () => {
+      try {
+        const roles = await api.listRoles();
+        const eway = (roles || []).find((r) => r.name === EWAY_ROLE_NAME);
+        if (eway) {
+          setEwayRoleId(eway.id);
+          refreshEwayMembers(eway.id);
+        }
+      } catch (err) {
+        // non-fatal
+      }
+    })();
+  }, [isManager, fetchUsers, refreshEwayMembers]);
+
+  const handleGrantEway = async (userId) => {
+    if (!ewayRoleId) return;
+    setGrantingId(userId);
+    try {
+      await api.assignRole(ewayRoleId, userId);
+      await refreshEwayMembers(ewayRoleId);
+    } catch (err) {
+      setError(err.message || 'Failed to grant eWay access');
+    } finally {
+      setGrantingId(null);
+    }
+  };
 
   if (!isManager) {
     return <Alert severity="warning">Only admin users can manage users.</Alert>;
@@ -103,7 +147,15 @@ export default function UserManagementPage() {
             ),
           },
         };
-        await api.createUser(newUser);
+        const created = await api.createUser(newUser);
+        if (ewayRoleId && created?.id) {
+          try {
+            await api.assignRole(ewayRoleId, created.id);
+            await refreshEwayMembers(ewayRoleId);
+          } catch (grantErr) {
+            setError(`User created but eWay access grant failed: ${grantErr.message}`);
+          }
+        }
       }
       setDialogOpen(false);
       fetchUsers();
@@ -165,6 +217,7 @@ export default function UserManagementPage() {
               <TableRow>
                 <TableCell>Name</TableCell>
                 <TableCell>Email</TableCell>
+                <TableCell>eWay Access</TableCell>
                 <TableCell>Assigned GSTINs</TableCell>
                 <TableCell>Filters</TableCell>
                 <TableCell align="right">Actions</TableCell>
@@ -183,6 +236,34 @@ export default function UserManagementPage() {
                       </Typography>
                     </TableCell>
                     <TableCell>{u.email}</TableCell>
+                    <TableCell>
+                      {u.administrator ? (
+                        <Chip size="small" color="success" label="Admin" variant="outlined" />
+                      ) : ewayMemberIds.has(u.id) ? (
+                        <Chip
+                          size="small"
+                          color="success"
+                          icon={<CheckCircleIcon />}
+                          label="Granted"
+                          variant="outlined"
+                        />
+                      ) : ewayRoleId ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="warning"
+                          startIcon={grantingId === u.id ? <CircularProgress size={14} /> : <KeyIcon />}
+                          disabled={grantingId === u.id}
+                          onClick={() => handleGrantEway(u.id)}
+                        >
+                          Grant
+                        </Button>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          —
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                         {uGstins.length === 0 && (

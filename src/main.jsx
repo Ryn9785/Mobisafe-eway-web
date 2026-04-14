@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
+import ForbiddenToast from './components/ForbiddenToast';
 import theme from './theme';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <CssBaseline />
         <AuthProvider>
           <App />
+          <ForbiddenToast />
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>
