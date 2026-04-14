@@ -55,7 +55,7 @@ export function AuthProvider({ children }) {
     return u;
   };
 
-  const isManager = user && user.userLimit !== 0;
+  const isManager = !!user && (user.administrator || user.userLimit !== 0);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refreshUser, isManager }}>
