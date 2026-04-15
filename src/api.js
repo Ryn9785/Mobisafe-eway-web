@@ -44,12 +44,20 @@ async function dispatchForbidden(res) {
 }
 
 async function request(url, options = {}) {
-  const res = await fetch(url, { credentials: 'include', ...options });
+  const { silent, ...fetchOptions } = options;
+  const res = await fetch(url, { credentials: 'include', ...fetchOptions });
   if (res.status === 401) {
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+    if (!silent) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+    }
     throw new Error('Unauthorized');
   }
   if (res.status === 403) {
+    if (silent) {
+      const err = new Error('Forbidden');
+      err.status = 403;
+      throw err;
+    }
     throw await dispatchForbidden(res);
   }
   return res;
@@ -71,9 +79,11 @@ async function noContentRequest(url, options = {}) {
 }
 
 async function jsonRequest(url, options = {}) {
+  const { silent, headers, ...rest } = options;
   const res = await request(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    silent,
+    ...rest,
   });
   if (res.status === 204) return null;
   if (!res.ok) {
@@ -149,12 +159,12 @@ const api = {
   },
 
   // --- Roles (ABAC) ---
-  listRoles() {
-    return jsonRequest(`${BASE}/roles`);
+  listRoles(options = {}) {
+    return jsonRequest(`${BASE}/roles`, options);
   },
 
-  listRoleMembers(roleId) {
-    return jsonRequest(`${BASE}/roles/${roleId}/members`);
+  listRoleMembers(roleId, options = {}) {
+    return jsonRequest(`${BASE}/roles/${roleId}/members`, options);
   },
 
   assignRole(roleId, userId) {

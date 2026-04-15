@@ -17,7 +17,7 @@ export function AuthProvider({ children }) {
       return;
     }
     try {
-      const roles = await api.listRoles();
+      const roles = await api.listRoles({ silent: true });
       const ewayAdmin = (roles || []).find((r) => r.name === 'EWAY_ADMIN');
       if (!ewayAdmin) {
         setEwayAdminRoleId(null);
@@ -26,7 +26,7 @@ export function AuthProvider({ children }) {
       }
       setEwayAdminRoleId(ewayAdmin.id);
       try {
-        const members = await api.listRoleMembers(ewayAdmin.id);
+        const members = await api.listRoleMembers(ewayAdmin.id, { silent: true });
         setIsEwayAdminMember((members || []).some((m) => m.id === u.id));
       } catch {
         setIsEwayAdminMember(false);
