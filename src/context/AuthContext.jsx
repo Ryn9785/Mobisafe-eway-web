@@ -7,18 +7,48 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [ewayAdminRoleId, setEwayAdminRoleId] = useState(null);
+  const [isEwayAdminMember, setIsEwayAdminMember] = useState(false);
   const navigate = useNavigate();
+
+  const probeEwayAdmin = useCallback(async (u) => {
+    if (!u || u.administrator) {
+      setIsEwayAdminMember(false);
+      return;
+    }
+    try {
+      const roles = await api.listRoles();
+      const ewayAdmin = (roles || []).find((r) => r.name === 'EWAY_ADMIN');
+      if (!ewayAdmin) {
+        setEwayAdminRoleId(null);
+        setIsEwayAdminMember(false);
+        return;
+      }
+      setEwayAdminRoleId(ewayAdmin.id);
+      try {
+        const members = await api.listRoleMembers(ewayAdmin.id);
+        setIsEwayAdminMember((members || []).some((m) => m.id === u.id));
+      } catch {
+        setIsEwayAdminMember(false);
+      }
+    } catch {
+      // Sub-users lack role:list — treat as non-admin member.
+      setEwayAdminRoleId(null);
+      setIsEwayAdminMember(false);
+    }
+  }, []);
 
   const checkSession = useCallback(async () => {
     try {
       const u = await api.getSession();
       setUser(u);
+      probeEwayAdmin(u);
     } catch {
       setUser(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [probeEwayAdmin]);
 
   useEffect(() => {
     checkSession();
@@ -36,6 +66,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const u = await api.login(email, password);
     setUser(u);
+    probeEwayAdmin(u);
     return u;
   };
 
@@ -55,10 +86,22 @@ export function AuthProvider({ children }) {
     return u;
   };
 
-  const isManager = !!user && (user.administrator || user.userLimit !== 0);
+  const isEwayAdmin = !!user && (user.administrator || isEwayAdminMember);
+  const isManager = !!user && (user.administrator || user.userLimit !== 0 || isEwayAdminMember);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser, isManager }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        login,
+        logout,
+        refreshUser,
+        isManager,
+        isEwayAdmin,
+        ewayAdminRoleId,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
